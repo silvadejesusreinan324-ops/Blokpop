@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Rope Demolition - HTML</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#10141d;font-family:Arial,sans-serif;color:#fff;touch-action:none}
+canvas{display:block;width:100%;height:100%;background:linear-gradient(#78c8f5 0%,#c7ecff 68%,#8ac36b 68%,#65a24f 100%)}
+#hud{position:fixed;top:0;left:0;right:0;padding:12px;display:flex;justify-content:space-between;pointer-events:none}
+.box{background:#111a28dd;border:2px solid #ffffff33;border-radius:12px;padding:8px 12px;font-weight:bold;box-shadow:0 4px 12px #0004}
+#tip{position:fixed;left:50%;top:72px;transform:translateX(-50%);background:#111a28dd;padding:9px 14px;border-radius:20px;font-size:13px;text-align:center;pointer-events:none}
+#buttons{position:fixed;bottom:16px;left:0;right:0;display:flex;justify-content:center;gap:10px}
+button{border:0;border-radius:14px;padding:14px 18px;background:#182335eF;color:white;font-weight:bold;font-size:15px;border:2px solid #ffffff22;box-shadow:0 5px 12px #0005}
+button:active{transform:scale(.96)}
+#win,#start{position:fixed;inset:0;background:#07101dcc;display:flex;align-items:center;justify-content:center;padding:22px}
+.card{width:min(420px,92vw);background:#182335;border:2px solid #ffffff22;border-radius:22px;padding:26px;text-align:center;box-shadow:0 18px 60px #0008}
+.card h1{margin:0 0 8px;font-size:30px}
+.card p{color:#c9d5e6;line-height:1.45}
+.card button{background:#3d8cff;font-size:18px;padding:14px 30px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud">
+  <div class="box">💰 <span id="coins">0</span></div>
+  <div class="box">🏆 <span id="score">0</span></div>
+  <div class="box">Nível <span id="level">1</span></div>
+</div>
+<div id="tip">Arraste o ponto amarelo para lançar a corda</div>
+
+<div id="buttons">
+  <button id="reset">↻ Reiniciar</button>
+  <button id="next">Próximo nível</button>
+</div>
+
+<div id="start">
+ <div class="card">
+   <h1>🪢 Rope Demolition</h1>
+   <p>Derrube o máximo de blocos usando a corda. Toque e arraste o ponto amarelo para criar o movimento.</p>
+   <button id="play">Jogar</button>
+ </div>
+</div>
+
+<div id="win" class="hidden">
+ <div class="card">
+   <h1>💥 Construção demolida!</h1>
+   <p id="winText">Boa!</p>
+   <button id="again">Próximo nível</button>
+ </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+const coinsEl=document.getElementById('coins'),scoreEl=document.getElementById('score'),levelEl=document.getElementById('level');
+const win=document.getElementById('win'),start=document.getElementById('start');
+let W=innerWidth,H=innerHeight,dpr=Math.min(devicePixelRatio||1,2);
+let level=1,score=0,coins=0,running=false,dragging=false,won=false;
+let anchor={x:0,y:0},mouse={x:0,y:0},rope={x:0,y:0};
+let blocks=[],particles=[],debris=[];
+const gravity=900;
+
+function resize(){
+ W=innerWidth;H=innerHeight;dpr=Math.min(devicePixelRatio||1,2);
+ canvas.width=W*dpr;canvas.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);
+ buildLevel();
+}
+function buildLevel(){
+ blocks=[];
+ const cols=4+Math.min(level,3), rows=4+Math.min(level,3);
+ const bw=Math.min(72,(W-70)/cols-5), bh=42;
+ const total=cols*bw+(cols-1)*5;
+ const sx=(W-total)/2, ground=H*.68;
+ for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
+   const wobble=(y%2)*2;
+   blocks.push({
+    x:sx+x*(bw+5)+wobble,y:ground-(y+1)*(bh+3),w:bw,h:bh,
+    vx:0,vy:0,rot:0,vr:0,alive:true,hp:1
+   });
+ }
+ anchor={x:W/2,y:Math.max(105,H*.18)};
+ rope={x:anchor.x,y:anchor.y};
+ won=false;win.classList.add('hidden');updateHud();
+}
+function updateHud(){coinsEl.textContent=coins;scoreEl.textContent=score;levelEl.textContent=level}
+function pointerPos(e){
+ const r=canvas.getBoundingClientRect();
+ return {x:e.clientX-r.left,y:e.clientY-r.top};
+}
+canvas.addEventListener('pointerdown',e=>{
+ if(!running)return;
+ const p=pointerPos(e);
+ if(Math.hypot(p.x-anchor.x,p.y-anchor.y)<55){dragging=true;rope.x=p.x;rope.y=p.y;canvas.setPointerCapture(e.pointerId)}
+});
+canvas.addEventListener('pointermove',e=>{
+ if(!dragging)return;
+ const p=pointerPos(e);mouse=p;
+ const max=260,dx=p.x-anchor.x,dy=p.y-anchor.y,len=Math.hypot(dx,dy)||1;
+ const k=Math.min(1,max/len);rope.x=anchor.x+dx*k;rope.y=anchor.y+dy*k;
+});
+canvas.addEventListener('pointerup',()=>{
+ if(!dragging)return;
+ dragging=false;
+ launchRope();
+});
+canvas.addEventListener('pointercancel',()=>dragging=false);
+
+function launchRope(){
+ const dx=rope.x-anchor.x,dy=rope.y-anchor.y;
+ const power=Math.min(1450,Math.hypot(dx,dy)*5.2);
+ const len=Math.hypot(dx,dy)||1;
+ const vx=dx/len*power,vy=dy/len*power;
+ for(const b of blocks)if(b.alive){
+   const cx=b.x+b.w/2,cy=b.y+b.h/2;
+   const dist=Math.hypot(cx-rope.x,cy-rope.y);
+   if(dist<130){
+     const f=Math.max(0,1-dist/130);
+     b.vx+=vx*f*.025;
+     b.vy+=vy*f*.025-250*f;
+     b.vr+=(Math.random()-.5)*7*f;
+   }
+ }
+ // rope impact point gets a little impulse
+ for(let i=0;i<12;i++)particles.push({x:rope.x,y:rope.y,vx:(Math.random()-.5)*240,vy:(Math.random()-.5)*240,life:.45});
+ setTimeout(()=>{rope.x=anchor.x;rope.y=anchor.y},120);
+}
+
+function explode(b){
+ b.alive=false;score+=100;coins+=2;
+ for(let i=0;i<12;i++)particles.push({
+   x:b.x+b.w/2,y:b.y+b.h/2,vx:(Math.random()-.5)*400,vy:(Math.random()-.8)*420,life:.8
+ });
+}
+function update(dt){
+ if(!running)return;
+ let alive=0;
+ for(const b of blocks){
+  if(!b.alive)continue;
+  alive++;
+  b.vy+=gravity*dt;b.x+=b.vx*dt;b.y+=b.vy*dt;b.rot+=b.vr*dt;
+  b.vx*=Math.pow(.35,dt);b.vr*=Math.pow(.3,dt);
+  const ground=H*.68;
+  if(b.y+b.h>ground){b.y=ground-b.h;b.vy*=-.22;b.vx*=.75;b.vr*=.75}
+  if(b.x<-150||b.x>W+150||b.y>H+100)explode(b);
+  // collision with rope
+  const rx=rope.x,ry=rope.y;
+  const cx=Math.max(b.x,Math.min(rx,b.x+b.w)),cy=Math.max(b.y,Math.min(ry,b.y+b.h));
+  const d=Math.hypot(rx-cx,ry-cy);
+  if(d<18 && !dragging){
+    const dx=b.x+b.w/2-rx,dy=b.y+b.h/2-ry,L=Math.hypot(dx,dy)||1;
+    b.vx+=dx/L*420*dt;b.vy+=dy/L*420*dt;b.vr+=(Math.random()-.5)*10*dt;
+  }
+ }
+ particles.forEach(p=>{p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=500*dt;p.life-=dt});
+ particles=particles.filter(p=>p.life>0);
+ if(alive===0 && !won){
+   won=true;score+=500;coins+=10;updateHud();
+   document.getElementById('winText').textContent='Você ganhou 10 moedas e 500 pontos bônus!';
+   win.classList.remove('hidden');
+ }
+ updateHud();
+}
+function draw(){
+ ctx.clearRect(0,0,W,H);
+ // distant city
+ ctx.fillStyle='#ffffff55';
+ for(let i=0;i<8;i++){
+   const x=i*110-20,h=45+(i%4)*25;
+   ctx.fillRect(x,H*.68-h,70,h);
+   ctx.fillStyle='#ffe27a88';
+   for(let j=0;j<3;j++)ctx.fillRect(x+12+j*17,H*.68-h+12,8,10);
+   ctx.fillStyle='#ffffff55';
+ }
+ // ground
+ ctx.fillStyle='#4f8d42';ctx.fillRect(0,H*.68,W,H*.32);
+ ctx.fillStyle='#3d7135';ctx.fillRect(0,H*.68,W,5);
+ // rope
+ ctx.strokeStyle='#2b211b';ctx.lineWidth=7;ctx.lineCap='round';
+ ctx.beginPath();ctx.moveTo(anchor.x,anchor.y);ctx.lineTo(rope.x,rope.y);ctx.stroke();
+ ctx.strokeStyle='#d5a15d';ctx.lineWidth=4;
+ ctx.beginPath();ctx.moveTo(anchor.x,anchor.y);ctx.lineTo(rope.x,rope.y);ctx.stroke();
+ // anchor
+ ctx.fillStyle='#ffd23f';ctx.beginPath();ctx.arc(anchor.x,anchor.y,13,0,Math.PI*2);ctx.fill();
+ ctx.fillStyle='#fff2a3';ctx.beginPath();ctx.arc(anchor.x-4,anchor.y-4,4,0,Math.PI*2);ctx.fill();
+ // blocks
+ for(const b of blocks)if(b.alive){
+   ctx.save();ctx.translate(b.x+b.w/2,b.y+b.h/2);ctx.rotate(b.rot);
+   ctx.fillStyle='#d96d43';ctx.fillRect(-b.w/2,-b.h/2,b.w,b.h);
+   ctx.fillStyle='#ef8b59';ctx.fillRect(-b.w/2+3,-b.h/2+3,b.w-6,7);
+   ctx.strokeStyle='#9d452f';ctx.lineWidth=2;ctx.strokeRect(-b.w/2,-b.h/2,b.w,b.h);
+   ctx.fillStyle='#fff2b0';
+   ctx.fillRect(-b.w/2+12,-2,7,12);ctx.fillRect(b.w/2-19,-2,7,12);
+   ctx.restore();
+ }
+ for(const p of particles){
+   ctx.globalAlpha=Math.max(0,p.life);
+   ctx.fillStyle='#f5b84b';ctx.fillRect(p.x-3,p.y-3,6,6);
+ }
+ ctx.globalAlpha=1;
+}
+let last=performance.now();
+function loop(t){
+ const dt=Math.min(.025,(t-last)/1000);last=t;
+ update(dt);draw();requestAnimationFrame(loop);
+}
+function startGame(){running=true;start.classList.add('hidden');buildLevel()}
+document.getElementById('play').onclick=startGame;
+document.getElementById('reset').onclick=()=>{score=0;coins=0;buildLevel()};
+document.getElementById('next').onclick=()=>{if(won){level++;buildLevel()}};
+document.getElementById('again').onclick=()=>{level++;buildLevel()};
+window.addEventListener('resize',resize);
+resize();requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
